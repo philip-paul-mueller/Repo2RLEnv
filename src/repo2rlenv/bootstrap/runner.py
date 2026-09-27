@@ -394,14 +394,50 @@ def _bootstrap_from_user_dockerfile(
                 if resolved:
                     image_digest = resolved
 
+        # Use spec-provided test_cmds/rebuild_cmds if given; otherwise
+        # auto-detect from the Dockerfile (look for pytest/uv run pytest).
+        # pr_runtime needs test_cmds to run the two-stage validation
+        # (pre-fix: tests must fail; post-fix: tests must pass). Without
+        # them, all PRs are skipped with "no_fail_to_pass".
+        auto_test_cmds = spec.test_cmds
+        auto_rebuild_cmds = spec.rebuild_cmds
+        if auto_test_cmds is None or auto_rebuild_cmds is None:
+            df_text = dockerfile.read_text(encoding="utf-8")
+            if auto_test_cmds is None:
+                # Look for a RUN line containing pytest
+                for line in df_text.splitlines():
+                    s = line.strip()
+                    if s.startswith("RUN ") and "pytest" in s and "collect-only" not in s:
+                        # Extract the command after RUN
+                        auto_test_cmds = [s[4:].strip().split("2>&1")[0].strip()]
+                        break
+                if auto_test_cmds is None:
+                    # Fall back: look for 'uv run pytest' in any RUN line
+                    for line in df_text.splitlines():
+                        s = line.strip()
+                        if s.startswith("RUN ") and "uv run pytest" in s:
+                            auto_test_cmds = [s[4:].strip().split("2>&1")[0].strip()]
+                            break
+                if auto_test_cmds is None:
+                    auto_test_cmds = []
+            if auto_rebuild_cmds is None:
+                # Look for 'uv sync' or 'pip install -e .' in RUN lines
+                for line in df_text.splitlines():
+                    s = line.strip()
+                    if s.startswith("RUN ") and ("uv sync" in s or "pip install -e ." in s):
+                        auto_rebuild_cmds = [s[4:].strip().split("2>&1")[0].strip()]
+                        break
+                if auto_rebuild_cmds is None:
+                    auto_rebuild_cmds = []
+
         result = BootstrapResult(
             image_digest=image_digest,
             image_tag=tag,
             language=LanguageHint.UNKNOWN,  # we didn't detect — the user owns the image
             repo=owner_name,
             ref=ref_sha,
-            rebuild_cmds=[],  # caller supplied a Dockerfile; rebuild is up to them
-            test_cmds=[],
+            rebuild_cmds=auto_rebuild_cmds,
+            test_cmds=auto_test_cmds,
             smoke_passed=True,  # no agent ran a smoke; trust the user
             iterations=0,
             build_time_sec=round(time.monotonic() - start, 2),

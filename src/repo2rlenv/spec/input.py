@@ -267,6 +267,8 @@ class BootstrapSpec(BaseModel):
     max_seconds: int = 1800  # 30-minute timeout per bootstrap
     base_image: str | None = None  # override per-language default
     user_dockerfile: Path | None = None  # bypass agent iteration entirely
+    test_cmds: list[str] | None = None  # test commands; auto-detected if None and user_dockerfile is set
+    rebuild_cmds: list[str] | None = None  # rebuild commands; auto-detected if None and user_dockerfile is set
     cache_dir: Path = Field(
         default_factory=lambda: Path(os.environ.get("R2E_CACHE_DIR", "./workspace/bootstrap"))
     )
