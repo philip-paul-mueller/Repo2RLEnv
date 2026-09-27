@@ -196,10 +196,11 @@ class DockerSandbox:
         with DockerSandbox.start(...) as sb: ...
     """
 
-    def __init__(self, container_id: str, repo_mount: str, platform: str):
+    def __init__(self, container_id: str, repo_mount: str, platform: str, *, workdir: str = "/workspace"):
         self.container_id = container_id
         self.repo_mount = repo_mount
         self.platform = platform
+        self.workdir = workdir
         self._alive = True
 
     @classmethod
@@ -261,6 +262,12 @@ class DockerSandbox:
         # Bind mounts aren't captured by `docker commit`, so a bind-mounted /workspace
         # would leave the committed image with an empty repo dir. We want the repo
         # baked into the image's filesystem.
+        #
+        # Podman compatibility: Podman validates `-w <workdir>` exists BEFORE
+        # running any command (Docker auto-creates it). Since <workdir> doesn't
+        # exist in the base image yet, we omit `-w` from `docker run` and create
+        # the dir as the entrypoint command instead. Subsequent `exec()` calls
+        # use `-w <workdir>` (now exists) so agent commands run in /workspace.
         args = [
             "docker",
             "run",
@@ -269,23 +276,16 @@ class DockerSandbox:
             platform,
             "--name",
             name,
-            "-w",
-            workdir,
         ]
         for k, v in (env or {}).items():
             args.extend(["-e", f"{k}={v}"])
-        args.extend([base_image, "sleep", "infinity"])
+        args.extend([base_image, "bash", "-c", f"mkdir -p {shlex.quote(workdir)} && sleep infinity"])
         result = _run(args, timeout=60)
         if not result.ok:
             raise DockerError(f"docker run failed: {result.stderr.strip()[:400]}")
         cid = result.stdout.strip()
         if not cid:
             raise DockerError("docker run did not return a container id")
-        # Create workdir + copy repo contents into it
-        mk = _run(["docker", "exec", cid, "mkdir", "-p", workdir], timeout=15)
-        if not mk.ok:
-            _run(["docker", "rm", "-f", cid], timeout=10)
-            raise DockerError(f"mkdir {workdir} failed: {mk.stderr.strip()[:400]}")
         # `docker cp <src>/. <cid>:<dest>` copies contents (not the dir itself)
         cp = _run(
             ["docker", "cp", f"{repo_dir.resolve()}/.", f"{cid}:{workdir}"],
@@ -306,7 +306,9 @@ class DockerSandbox:
         if not self._alive:
             raise DockerError("sandbox has been cleaned up; cannot exec")
         # Wrap in bash -lc so users can write multi-line / piped commands.
-        args = ["docker", "exec", self.container_id, "bash", "-lc", command]
+        # -w sets the working directory (Podman doesn't inherit it from
+        # `docker run` since we create /workspace as the entrypoint).
+        args = ["docker", "exec", "-w", self.workdir, self.container_id, "bash", "-lc", command]
         return _run(args, timeout=timeout)
 
     def read_file(self, path: str, *, max_bytes: int = 50_000) -> str:
