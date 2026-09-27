@@ -332,7 +332,11 @@ class DockerSandbox:
         """
         if not self._alive:
             raise DockerError("sandbox has been cleaned up; cannot commit")
-        r = _run(["docker", "commit", "-m", message, self.container_id, tag], timeout=timeout)
+        # Podman compatibility: Podman's default image format doesn't
+        # support the -m (message) flag. Use -f docker so the commit
+        # message is accepted (Docker accepts -f docker too, so this is
+        # safe under both runtimes).
+        r = _run(["docker", "commit", "-f", "docker", "-m", message, self.container_id, tag], timeout=timeout)
         if not r.ok:
             raise DockerError(f"docker commit failed: {r.stderr.strip()[:400]}")
         # Resolve the image's RepoDigests (only present after a push) OR the local Id
