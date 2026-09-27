@@ -311,9 +311,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
         for k, v in _parse_pipeline_opts(getattr(args, "bootstrap_opt", None)).items():
             if not hasattr(bspec, k):
                 raise SystemExit(f"--bootstrap-opt: unknown BootstrapSpec field {k!r}")
-            # Pydantic will coerce types as needed (str→Path, str→int, etc.)
+            # model_copy(update={...}) bypasses validation, so str values for
+            # Path fields stay as str (e.g. user_dockerfile="/path" → str, not
+            # Path). Use model_validate on the full dict to get type coercion.
             try:
-                bspec = bspec.model_copy(update={k: v})
+                merged = {**bspec.model_dump(), k: v}
+                bspec = type(bspec).model_validate(merged)
             except Exception as exc:
                 raise SystemExit(f"--bootstrap-opt {k}={v!r}: {exc}") from exc
         with bootstrap_view_or_plain(
